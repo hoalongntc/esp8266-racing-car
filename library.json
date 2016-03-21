@@ -1,0 +1,11 @@
+{
+  "name": "racing-car",
+  "description": "Racing car controlled over WiFi using mobile app",
+  "keywords": "esp8266,wifi,car,racing,nodemcu",
+  "authors": {
+    "name": "Nguyen Huu Tung",
+    "email": "developer.tungnguyen@gmail.com"
+  },
+  "frameworks": "arduino",
+  "platforms": "espressif"
+}
