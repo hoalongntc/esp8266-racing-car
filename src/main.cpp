@@ -1,8 +1,6 @@
 #include "Arduino.h"
 #include "Servo.h"
 #include "ESP8266WiFi.h"
-#include "ArduinoJson.h"
-#include "FS.h"
 
 ////////////////////////////////////////////////////////////////////////////////
 #define TCP_SERVER_PORT 23
@@ -11,17 +9,69 @@
 
 #define SERVO_PIN D2
 #define SERVO_DEFAULT_POS 90
-#define SERVO_MINIMUM_POS 30
-#define SERVO_MAXIMUM_POS 150
+#define SERVO_MINIMUM_POS 60
+#define SERVO_MAXIMUM_POS 120
 
-#define MOTOR_SPEED_PIN D3
-#define MOTOR_FORWARD_PIN D5
-#define MOTOR_BACKWARD_PIN D6
-#define MOTOR_MAXIMUM_SPEED 255
+#define MOTOR_L_SPEED_PIN D3
+#define MOTOR_L_FORWARD_PIN D5
+#define MOTOR_L_BACKWARD_PIN D6
+#define MOTOR_R_SPEED_PIN D4
+#define MOTOR_R_FORWARD_PIN D7
+#define MOTOR_R_BACKWARD_PIN D8
+#define MOTOR_MAXIMUM_SPEED 1023
 
-#define CONFIG_WIFI_STA_MAX_TRY 10000
-#define CONFIG_WIFI_STA_SSID_KEY "wifi_sta_ssid"
-#define CONFIG_WIFI_STA_PASS_KEY "wifi_sta_password"
+#define WIFI_STA_MAX_TRY 10000
+// #define CONFIG_WIFI_STA_SSID_KEY "wifi_sta_ssid"
+// #define CONFIG_WIFI_STA_PASS_KEY "wifi_sta_password"
+// #define CONFIG_WIFI_AP_SSID_KEY "wifi_ap_ssid"
+// #define CONFIG_WIFI_AP_PASS_KEY "wifi_ap_password"
+#define WIFI_STA_SSID "DOU_Networks (SCS)"
+#define WIFI_STA_PASS "DOU12345"
+#define WIFI_AP_SSID_DEFAULT "Hoalong-Racing-Car"
+#define WIFI_AP_PASS_DEFAULT "12345678!@#"
+
+////////////////////////////////////////////////////////////////////////////////
+// config.json file
+
+// JsonObject& readConfigFileOrCreateInitConfigFileIfNeeded() {
+//   StaticJsonBuffer<200> jsonBuffer;
+//
+//   File configFile;
+//   if (SPIFFS.exists("/config.json")) {
+//     Serial.println("Config file is already existed!");
+//
+//     configFile = SPIFFS.open("/config.json", "r");
+//     size_t size = configFile.size();
+//     if (size > 1024) {
+//       // Recreate new init config file
+//       Serial.println("Config file size is too large");
+//     } else {
+//       // Allocate a buffer to store contents of the file.
+//       std::unique_ptr<char[]> buf(new char[size]);
+//       configFile.readBytes(buf.get(), size);
+//       JsonObject& config = jsonBuffer.parseObject(buf.get());
+//       if (!config.success()) {
+//         // Recreate new init config file
+//         Serial.println("Failed to parse config file");
+//       } else {
+//         return config;
+//       }
+//     }
+//   }
+//
+//   configFile = SPIFFS.open("/config.json", "w");
+//   if (!configFile) {
+//     Serial.println("Failed to open config file for writing");
+//     return jsonBuffer.createObject();
+//   }
+//
+//   JsonObject& initConfig = jsonBuffer.createObject();
+//   initConfig[CONFIG_WIFI_AP_SSID_KEY] = CONFIG_WIFI_AP_SSID_DEFAULT;
+//   initConfig[CONFIG_WIFI_AP_PASS_KEY] = CONFIG_WIFI_AP_PASS_DEFAULT;
+//
+//   initConfig.printTo(configFile);
+//   return initConfig;
+// }
 
 ////////////////////////////////////////////////////////////////////////////////
 // servo instance
@@ -45,71 +95,36 @@ void WiFiEvent(WiFiEvent_t event) {
     }
 }
 
-bool setupWiFiFromConfigFile() {
-  File configFile = SPIFFS.open("/config.json", "r");
-  if (!configFile) {
-    Serial.println("Failed to open config file");
-    return false;
-  }
-
-  size_t size = configFile.size();
-  if (size > 1024) {
-    Serial.println("Config file size is too large");
-    return false;
-  }
-
-  // Allocate a buffer to store contents of the file.
-  std::unique_ptr<char[]> buf(new char[size]);
-
-  // We don't use String here because ArduinoJson library requires the input
-  // buffer to be mutable. If you don't use ArduinoJson, you may as well
-  // use configFile.readString instead.
-  configFile.readBytes(buf.get(), size);
-
-  StaticJsonBuffer<200> jsonBuffer;
-  JsonObject& json = jsonBuffer.parseObject(buf.get());
-
-  if (!json.success()) {
-    Serial.println("Failed to parse config file");
-    return false;
-  }
-
-  if (!json.containsKey(CONFIG_WIFI_STA_KEY)) {
-    Serial.println("Not config for station mode yet");
-    return false;
-  }
-
-  const char* WIFI_SSID = json[CONFIG_WIFI_STA_KEY][CONFIG_WIFI_STA_SSID_KEY];
-  const char* WIFI_PASS = json[CONFIG_WIFI_STA_KEY][CONFIG_WIFI_STA_PASS_KEY];
-
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  WiFi.mode(WIFI_STA);
+bool setupWiFiStationMode(const char* ssid, const char* password) {
+  WiFi.begin(ssid, password);
+  WiFi.onEvent(WiFiEvent);
 
   Serial.print("Connecting to ");
-  Serial.println(WIFI_SSID);
+  Serial.println(ssid);
+
   int waited = 0;
   while (WiFi.status() != WL_CONNECTED) {
-    if(waited > CONFIG_WIFI_STA_MAX_TRY) {
+    Serial.print(".");
+
+    if(waited > WIFI_STA_MAX_TRY) {
       return false;
     }
 
     delay(500);
     waited += 500;
-    Serial.print(".");
   }
 
   return true;
 }
 
-void setupWiFiForConfig() {
+bool setupWiFiConfigMode(const char* ssid, const char* password) {
+  WiFi.softAP(ssid, password);
 
-}
+  IPAddress myIP = WiFi.softAPIP();
+	Serial.print("AP IP address: ");
+	Serial.println(myIP);
 
-void setupWiFi() {
-  // first, try to read config file and connect to setted up WiFi
-  if(!setupWiFiFromConfigFile()) {
-    setupWiFiForConfig();
-  }
+  return true;
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -132,8 +147,13 @@ void onServoEvent(String command) {
   delay(15);
 }
 
+// Accept from -255 to 255
 void onMotorEvent(String command) {
   Serial.println("Motor command " + command);
+
+  int direction = servo.read();
+  int d_speed_l = direction < 90 ? direction - 90 : 0;
+  int d_speed_r = direction > 90 ? 90 - direction : 0;
 
   int speed = command.toInt();
   if (speed > MOTOR_MAXIMUM_SPEED) {
@@ -141,18 +161,46 @@ void onMotorEvent(String command) {
   } else if (speed < -MOTOR_MAXIMUM_SPEED) {
     speed = -MOTOR_MAXIMUM_SPEED;
   }
+
   if (speed > 5) {
-    digitalWrite(MOTOR_FORWARD_PIN, HIGH);
-    digitalWrite(MOTOR_BACKWARD_PIN, LOW);
-    analogWrite(MOTOR_SPEED_PIN, speed);
+    digitalWrite(MOTOR_L_FORWARD_PIN, HIGH);
+    digitalWrite(MOTOR_L_BACKWARD_PIN, LOW);
+
+    digitalWrite(MOTOR_R_FORWARD_PIN, HIGH);
+    digitalWrite(MOTOR_R_BACKWARD_PIN, LOW);
+
+    analogWrite(MOTOR_L_SPEED_PIN, speed);
+    analogWrite(MOTOR_R_SPEED_PIN, speed);
   } else if(speed <= 5 && speed >= -5) {
-    digitalWrite(MOTOR_FORWARD_PIN, LOW);
-    digitalWrite(MOTOR_BACKWARD_PIN, LOW);
-    analogWrite(MOTOR_SPEED_PIN, 0);
+    digitalWrite(MOTOR_L_FORWARD_PIN, LOW);
+    digitalWrite(MOTOR_L_BACKWARD_PIN, LOW);
+
+    digitalWrite(MOTOR_R_FORWARD_PIN, LOW);
+    digitalWrite(MOTOR_R_BACKWARD_PIN, LOW);
+
+    analogWrite(MOTOR_L_SPEED_PIN, 0);
+    analogWrite(MOTOR_R_SPEED_PIN, 0);
   } else if(speed < -5) {
-    digitalWrite(MOTOR_FORWARD_PIN, LOW);
-    digitalWrite(MOTOR_BACKWARD_PIN, HIGH);
-    analogWrite(MOTOR_SPEED_PIN, -speed);
+    digitalWrite(MOTOR_L_FORWARD_PIN, LOW);
+    digitalWrite(MOTOR_L_BACKWARD_PIN, HIGH);
+
+    digitalWrite(MOTOR_R_FORWARD_PIN, LOW);
+    digitalWrite(MOTOR_R_BACKWARD_PIN, HIGH);
+
+    analogWrite(MOTOR_L_SPEED_PIN, -speed);
+    analogWrite(MOTOR_R_SPEED_PIN, -speed);
+  }
+}
+
+void onRequest(String req) {
+  if(req.startsWith("servo")) {
+    String command = req.substring(5);
+    command.trim();
+    onServoEvent(command);
+  } else if(req.startsWith("motor")) {
+    String command = req.substring(5);
+    command.trim();
+    onMotorEvent(command);
   }
 }
 
@@ -160,31 +208,40 @@ void onMotorEvent(String command) {
 // setup call
 void setup()
 {
-  // initialize serial
-  Serial.begin(9600);
+  // initialiaze motor
+  pinMode(MOTOR_L_SPEED_PIN, OUTPUT);
+  analogWrite(MOTOR_L_SPEED_PIN, 0);
+
+  pinMode(MOTOR_L_FORWARD_PIN, OUTPUT);
+  digitalWrite(MOTOR_L_FORWARD_PIN, LOW);
+
+  pinMode(MOTOR_L_BACKWARD_PIN, OUTPUT);
+  digitalWrite(MOTOR_L_BACKWARD_PIN, LOW);
+
+  pinMode(MOTOR_R_SPEED_PIN, OUTPUT);
+  analogWrite(MOTOR_R_SPEED_PIN, 0);
+
+  pinMode(MOTOR_R_FORWARD_PIN, OUTPUT);
+  digitalWrite(MOTOR_R_FORWARD_PIN, LOW);
+
+  pinMode(MOTOR_R_BACKWARD_PIN, OUTPUT);
+  digitalWrite(MOTOR_R_BACKWARD_PIN, LOW);
 
   // initialize led
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LOW);
 
-  // initialiaze motor
-  pinMode(MOTOR_SPEED_PIN, OUTPUT);
-  pinMode(MOTOR_FORWARD_PIN, OUTPUT);
-  pinMode(MOTOR_BACKWARD_PIN, OUTPUT);
-  analogWrite(MOTOR_SPEED_PIN, 0);
-  digitalWrite(MOTOR_FORWARD_PIN, LOW);
-  digitalWrite(MOTOR_BACKWARD_PIN, LOW);
-
-
-
-
-  Serial.println("Wait for WiFi... ");
-  delay(2000);
+  // initialize serial
+  Serial.begin(9600);
 
   // initialize servo
   servo.attach(SERVO_PIN);
-  servo.write(0);
+  servo.write(90);
   delay(15);
+
+  // setup wifi
+  setupWiFiStationMode(WIFI_STA_SSID, WIFI_STA_PASS);
+  delay(2000);
 
   // Start the server
   tcp_server.begin();
@@ -224,15 +281,7 @@ void loop()
 
       // Read the first line of the request
       String req = client.readStringUntil('\r');
-      if(req.startsWith("servo")) {
-        String command = req.substring(5);
-        command.trim();
-        onServoEvent(command);
-      } else if(req.startsWith("motor")) {
-        String command = req.substring(5);
-        command.trim();
-        onMotorEvent(command);
-      }
+      onRequest(req);
     }
   }
 
